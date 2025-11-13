@@ -1,6 +1,29 @@
 import { useEffect, useMemo, useState } from 'react'
 
-const baseUrl = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000'
+// Smart backend URL resolution to avoid "Failed to fetch"
+const resolvedBackendUrl = (() => {
+  const envUrl = import.meta.env.VITE_BACKEND_URL
+  if (envUrl) return envUrl.replace(/\/$/, '')
+  if (typeof window !== 'undefined') {
+    // Allow overriding via global for quick fixes
+    // eslint-disable-next-line no-undef
+    if (window.BACKEND_URL) return window.BACKEND_URL.replace(/\/$/, '')
+    const { protocol, hostname, port, host } = window.location
+    // Modal-style host often uses -3000 and -8000 subdomains
+    if (host.includes('-3000')) {
+      return `${protocol}//${host.replace('-3000', '-8000')}`
+    }
+    // If running locally on 3000, talk to 8000
+    if (port === '3000') {
+      return `${protocol}//${hostname}:8000`
+    }
+    // Fallback: same origin
+    return `${protocol}//${host}`
+  }
+  return 'http://localhost:8000'
+})()
+
+const baseUrl = resolvedBackendUrl
 
 async function api(path, { method = 'GET', body, token } = {}) {
   const res = await fetch(`${baseUrl}${path}`, {
@@ -153,13 +176,26 @@ function Courses({ token, onEnrolled }) {
   const [courses, setCourses] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
-  useEffect(() => {
+  const load = async () => {
     setLoading(true)
-    api('/courses')
-      .then(setCourses)
-      .catch(e=>setError(e.message))
-      .finally(()=>setLoading(false))
-  }, [])
+    setError('')
+    try {
+      const list = await api('/courses')
+      if (list.length === 0) {
+        // auto-seed demo data
+        await api('/seed', { method: 'POST' })
+        const seeded = await api('/courses')
+        setCourses(seeded)
+      } else {
+        setCourses(list)
+      }
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setLoading(false)
+    }
+  }
+  useEffect(() => { load() }, [])
 
   const enroll = async (courseId) => {
     try {
